@@ -120,11 +120,9 @@ async def show_coins(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     coins = user_settings[chat_id]["coins"]
     if coins:
-        await update.message.reply_text("Отслеживаемые монеты:
-" + "\n".join(coins))
+        await update.message.reply_text("Отслеживаемые монеты:\n" + "\n".join(coins))
     else:
         await update.message.reply_text("Список монет пуст. Используй /add чтобы добавить.")
-
 
 async def add_coin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
