@@ -1,0 +1,164 @@
+import logging
+import requests
+import pandas as pd
+import pandas_ta as ta
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+import asyncio
+import os
+
+TOKEN = os.getenv("BOT_TOKEN")
+
+user_settings = {}
+
+logging.basicConfig(level=logging.INFO)
+
+def get_ohlcv(symbol, interval="15m", limit=100):
+    url = f"https://www.okx.com/api/v5/market/history-candles?instId={symbol}&bar={interval}&limit={limit}"
+    resp = requests.get(url)
+    data = resp.json()
+    if data.get("code") != "0":
+        logging.error(f"OKX API error: {data.get('msg')}")
+        return None
+    df = pd.DataFrame(data["data"], columns=["timestamp","open","high","low","close","volume","turnover"])
+    df["close"] = df["close"].astype(float)
+    df["volume"] = df["volume"].astype(float)
+    return df
+
+def check_signal(df):
+    if df is None or len(df) < 30:
+        return None
+    df["EMA8"] = ta.ema(df["close"], length=8)
+    df["EMA21"] = ta.ema(df["close"], length=21)
+    df["RSI"] = ta.rsi(df["close"], length=14)
+    macd = ta.macd(df["close"])
+    df = pd.concat([df, macd], axis=1)
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+
+    cross_up = (prev["EMA8"] < prev["EMA21"]) and (last["EMA8"] > last["EMA21"])
+    cross_down = (prev["EMA8"] > prev["EMA21"]) and (last["EMA8"] < last["EMA21"])
+    rsi = last["RSI"]
+    macd_val = last["MACD_12_26_9"]
+
+    if cross_up and rsi > 50 and macd_val > 0:
+        return "LONG"
+    elif cross_down and rsi < 50 and macd_val < 0:
+        return "SHORT"
+    return None
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if chat_id not in user_settings:
+        user_settings[chat_id] = {
+            "coins": ["BTC-USDT", "ETH-USDT", "SOL-USDT", "HBAR-USDT", "DOGE-USDT", "H-USDT", "SOON-USDT"],
+            "interval": "15m",
+            "last_signals": {}
+        }
+    await update.message.reply_text(
+        "👋 Привет! Я SignalMaxBot.\n"
+        "Команды:\n"
+        "/добавь SYMBOL - добавить монету\n"
+        "/удали SYMBOL - удалить монету\n"
+        "/монеты - показать список монет\n"
+        "/таймфрейм INTERVAL - установить таймфрейм (1m,5m,15m)\n"
+    )
+
+async def show_coins(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    coins = user_settings.get(chat_id, {}).get("coins", [])
+    if not coins:
+        text = "Ты не отслеживаешь ни одной монеты."
+    else:
+        text = "Отслеживаемые монеты:\n" + "\n".join(coins)
+    await update.message.reply_text(text)
+
+async def add_coin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if len(context.args) != 1:
+        await update.message.reply_text("Использование: /добавь SYMBOL (например, BTC-USDT)")
+        return
+    symbol = context.args[0].upper()
+    settings = user_settings.setdefault(chat_id, {
+        "coins": [],
+        "interval": "15m",
+        "last_signals": {}
+    })
+    if symbol in settings["coins"]:
+        await update.message.reply_text(f"Монета {symbol} уже в списке.")
+    else:
+        settings["coins"].append(symbol)
+        await update.message.reply_text(f"Монета {symbol} добавлена в список отслеживания.")
+
+async def remove_coin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if len(context.args) != 1:
+        await update.message.reply_text("Использование: /удали SYMBOL (например, BTC-USDT)")
+        return
+    symbol = context.args[0].upper()
+    settings = user_settings.get(chat_id, {})
+    if symbol not in settings.get("coins", []):
+        await update.message.reply_text(f"Монеты {symbol} нет в списке.")
+    else:
+        settings["coins"].remove(symbol)
+        await update.message.reply_text(f"Монета {symbol} удалена из списка отслеживания.")
+
+async def set_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if len(context.args) != 1:
+        await update.message.reply_text("Использование: /таймфрейм INTERVAL (например, 1m,5m,15m)")
+        return
+    interval = context.args[0]
+    allowed = ["1m", "5m", "15m"]
+    if interval not in allowed:
+        await update.message.reply_text("Допустимые таймфреймы: 1m, 5m, 15m")
+        return
+    settings = user_settings.setdefault(chat_id, {
+        "coins": ["BTC-USDT", "ETH-USDT"],
+        "interval": "15m",
+        "last_signals": {}
+    })
+    settings["interval"] = interval
+    await update.message.reply_text(f"Таймфрейм изменён на {interval}")
+
+async def send_signal(app, chat_id, symbol, interval, signal):
+    message = f"📈 Сигнал на {signal}\nМонета: {symbol}\nТаймфрейм: {interval}\n\n"
+    if signal == "LONG":
+        message += "✅ EMA8 пересёк EMA21 вверх\n✅ RSI > 50\n✅ MACD в положительной зоне"
+    else:
+        message += "✅ EMA8 пересёк EMA21 вниз\n✅ RSI < 50\n✅ MACD в отрицательной зоне"
+    await app.bot.send_message(chat_id=chat_id, text=message)
+
+async def monitor(app):
+    while True:
+        for chat_id, settings in user_settings.items():
+            coins = settings.get("coins", [])
+            interval = settings.get("interval", "15m")
+            for symbol in coins:
+                df = get_ohlcv(symbol, interval)
+                if df is None:
+                    continue
+                signal = check_signal(df)
+                last_signal = settings["last_signals"].get(symbol)
+                if signal and signal != last_signal:
+                    await send_signal(app, chat_id, symbol, interval, signal)
+                    settings["last_signals"][symbol] = signal
+        await asyncio.sleep(60)
+
+if __name__ == "__main__":
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("монеты", show_coins))
+    app.add_handler(CommandHandler("добавь", add_coin))
+    app.add_handler(CommandHandler("удали", remove_coin))
+    app.add_handler(CommandHandler("таймфрейм", set_interval))
+
+    async def main():
+        await asyncio.gather(
+            app.run_polling(),
+            monitor(app)
+        )
+
+    import asyncio
+    asyncio.run(main())

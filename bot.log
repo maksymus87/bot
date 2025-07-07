@@ -1,0 +1,17 @@
+2025-07-07 00:20:29,446 - __main__ - ERROR - BOT_TOKEN not set. Please set the BOT_TOKEN environment variable.
+2025-07-07 00:21:11,225 - __main__ - ERROR - Application failed to start: Command `монеты` is not a valid bot command
+2025-07-07 00:21:12,319 - __main__ - ERROR - Application failed to start: Command `монеты` is not a valid bot command
+2025-07-07 00:21:54,625 - __main__ - INFO - Bot handlers registered successfully
+2025-07-07 00:21:54,627 - __main__ - ERROR - Bot crashed with error: Cannot close a running event loop
+2025-07-07 00:21:54,628 - __main__ - ERROR - Application failed to start: Cannot close a running event loop
+2025-07-07 00:21:54,888 - __main__ - INFO - Bot handlers registered successfully
+2025-07-07 00:21:54,889 - __main__ - ERROR - Bot crashed with error: Cannot close a running event loop
+2025-07-07 00:21:54,890 - __main__ - ERROR - Application failed to start: Cannot close a running event loop
+2025-07-07 00:21:58,139 - __main__ - INFO - Bot handlers registered successfully
+2025-07-07 00:21:58,141 - __main__ - ERROR - Bot crashed with error: Cannot close a running event loop
+2025-07-07 00:21:58,142 - __main__ - ERROR - Application failed to start: Cannot close a running event loop
+2025-07-07 00:22:20,328 - __main__ - INFO - Bot handlers registered successfully
+2025-07-07 00:22:20,329 - __main__ - ERROR - Bot crashed with error: Cannot close a running event loop
+2025-07-07 00:23:07,940 - __main__ - INFO - Bot handlers registered successfully
+2025-07-07 00:23:07,941 - __main__ - ERROR - Bot crashed with error: Cannot close a running event loop
+2025-07-07 00:23:07,941 - __main__ - INFO - Starting signal monitoring loop

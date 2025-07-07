@@ -1,0 +1,66 @@
+import logging import requests import pandas as pd import pandas_ta as ta import matplotlib.pyplot as plt from io import BytesIO from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup from telegram.ext import ( ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler, ConversationHandler, MessageHandler, filters ) import asyncio import os
+
+TOKEN = os.getenv("BOT_TOKEN")
+
+logging.basicConfig(level=logging.INFO)
+
+user_settings = {}
+
+CHOOSING_ACTION, ADDING_COIN, REMOVING_COIN = range(3) POPULAR_COINS = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "HBAR-USDT", "DOGE-USDT"]
+
+def get_ohlcv(symbol, interval="15m", limit=100): url = f"https://www.okx.com/api/v5/market/history-candles?instId={symbol}&bar={interval}&limit={limit}" try: resp = requests.get(url, timeout=10) data = resp.json() if data.get("code") != "0": logging.error(f"OKX API error for {symbol}: {data.get('msg')}") return None df = pd.DataFrame(data["data"], columns=["timestamp","open","high","low","close","volume","turnover"]) df = df.iloc[::-1]  # chronological order df["close"] = df["close"].astype(float) df["volume"] = df["volume"].astype(float) return df except Exception as e: logging.error(f"Error fetching OHLCV data for {symbol}: {e}") return None
+
+def check_signal(df): if df is None or len(df) < 30: return None df["EMA8"] = ta.ema(df["close"], length=8) df["EMA21"] = ta.ema(df["close"], length=21) df["RSI"] = ta.rsi(df["close"], length=14) macd = ta.macd(df["close"]) df = pd.concat([df, macd], axis=1) last = df.iloc[-1] prev = df.iloc[-2]
+
+cross_up = (prev["EMA8"] < prev["EMA21"]) and (last["EMA8"] > last["EMA21"])
+cross_down = (prev["EMA8"] > prev["EMA21"]) and (last["EMA8"] < last["EMA21"])
+rsi = last["RSI"]
+macd_val = last["MACD_12_26_9"]
+
+if cross_up and rsi > 50 and macd_val > 0:
+    return "LONG"
+elif cross_down and rsi < 50 and macd_val < 0:
+    return "SHORT"
+return None
+
+async def send_signal(app, chat_id, symbol, interval, signal): if signal == "LONG": emoji = "\ud83d\udcc8" description = ( "\u2705 EMA8 пересёк EMA21 вверх\n" "\u2705 RSI > 50\n" "\u2705 MACD в положительной зоне" ) advice = "\ud83d\udccc Рекомендация: заходить в LONG" else: emoji = "\ud83d\udcc9" description = ( "\u2705 EMA8 пересёк EMA21 вниз\n" "\u2705 RSI < 50\n" "\u2705 MACD в отрицательной зоне" ) advice = "\ud83d\udccc Рекомендация: заходить в SHORT"
+
+message = (
+    f"{emoji} *Сигнал на {signal}*\n"
+    f"Монета: `{symbol}`\n"
+    f"Таймфрейм: `{interval}`\n\n"
+    f"{description}\n\n"
+    f"{advice}"
+)
+
+await app.bot.send_message(
+    chat_id=chat_id,
+    text=message,
+    parse_mode="Markdown"
+)
+
+async def monitor(app): while True: for chat_id, settings in user_settings.items(): coins = settings.get("coins", []) intervals = settings.get("intervals", ["15m"]) for symbol in coins: for interval in intervals: df = get_ohlcv(symbol, interval) if df is None: continue signal = check_signal(df) key = f"{symbol}_{interval}" last_signal = settings["last_signals"].get(key) if signal and signal != last_signal: await send_signal(app, chat_id, symbol, interval, signal) settings["last_signals"][key] = signal await asyncio.sleep(60)
+
+async def set_interval(update: Update, context: ContextTypes.DEFAULT_TYPE): chat_id = update.effective_chat.id intervals = context.args allowed = {"1m", "5m", "15m"} chosen = [i for i in intervals if i in allowed] if not chosen: await update.message.reply_text("Укажи хотя бы один из: 1m, 5m, 15m\nНапример: /таймфрейм 1m 5m") return settings = user_settings.setdefault(chat_id, { "coins": ["BTC-USDT"], "intervals": ["15m"], "last_signals": {} }) settings["intervals"] = chosen await update.message.reply_text(f"Таймфреймы обновлены: {', '.join(chosen)}")
+
+async def add_coin(update: Update, context: ContextTypes.DEFAULT_TYPE): chat_id = update.effective_chat.id if len(context.args) != 1: await update.message.reply_text("Использование: /добавь SYMBOL (например, BTC-USDT)") return symbol = context.args[0].upper() settings = user_settings.setdefault(chat_id, { "coins": [], "intervals": ["15m"], "last_signals": {} }) if symbol in settings["coins"]: await update.message.reply_text(f"Монета {symbol} уже в списке.") else: settings["coins"].append(symbol) await update.message.reply_text(f"Монета {symbol} добавлена.")
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE): chat_id = update.effective_chat.id if chat_id not in user_settings: user_settings[chat_id] = { "coins": ["BTC-USDT", "ETH-USDT"], "intervals": ["1m", "5m", "15m"], "last_signals": {} } await update.message.reply_text( "\ud83d\udc4b Привет! Я SignalMaxBot.\n" "Команды:\n" "/добавь SYMBOL - добавить монету\n" "/монеты - показать список монет\n" "/таймфрейм 1m 5m - установить таймфреймы\n" )
+
+async def show_coins(update: Update, context: ContextTypes.DEFAULT_TYPE): chat_id = update.effective_chat.id coins = user_settings.get(chat_id, {}).get("coins", []) if not coins: await update.message.reply_text("Список монет пуст.") else: await update.message.reply_text("Отслеживаемые монеты:\n" + "\n".join(coins))
+
+if name == "main": app = ApplicationBuilder().token(TOKEN).build()
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("добавь", add_coin))
+app.add_handler(CommandHandler("таймфрейм", set_interval))
+app.add_handler(CommandHandler("монеты", show_coins))
+
+async def main():
+    await asyncio.gather(
+        app.run_polling(),
+        monitor(app)
+    )
+
+asyncio.run(main())
+
